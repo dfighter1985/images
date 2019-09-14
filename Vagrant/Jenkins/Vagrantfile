@@ -32,7 +32,8 @@ Vagrant.configure("2") do |config|
   config.vm.box_check_update = false
 
   # Forward ports
-  config.vm.network "forwarded_port", guest: 8080, host: 8080
+  config.vm.network "forwarded_port", guest: 80, host: 80
+  config.vm.network "forwarded_port", guest: 443, host: 443
 
   config.vm.provider "virtualbox" do |vb|
     vb.gui = true
@@ -48,12 +49,22 @@ Vagrant.configure("2") do |config|
 	 sudo sh -c 'echo deb http://pkg.jenkins.io/debian-stable binary/ > /etc/apt/sources.list.d/jenkins.list'
 	 apt-get update
 	 apt-get dist-upgrade -y
-	 apt-get install -y default-jre-headless docker.io
+	 apt-get install -y default-jre-headless docker.io nginx
 	 
 	 # Enable Docker REST API locally
 	 sed -i 's|-H fd://|-H tcp://127.0.0.1:8888 -H fd://|g' /lib/systemd/system/docker.service
 	 systemctl daemon-reload
 	 service docker restart
+	 
+	 # Nginx HTTPS terminator
+	 mkdir /etc/nginx/ssl
+	 openssl req -new -x509 -nodes -subj '/CN=jenkins.local' -out /etc/nginx/ssl/jenkins.crt -keyout /etc/nginx/ssl/jenkins.key -days 3650
+	 echo "ssl_certificate /etc/nginx/ssl/jenkins.crt;" > /etc/nginx/snippets/ssl.conf
+	 echo "ssl_certificate_key /etc/nginx/ssl/jenkins.key;" >> /etc/nginx/snippets/ssl.conf
+	 rm /etc/nginx/sites-enabled/default
+	 cp /vagrant/jenkins /etc/nginx/sites-available 
+	 ln -s /etc/nginx/sites-available/jenkins /etc/nginx/sites-enabled/jenkins
+	 service nginx restart
 	 
 	 apt-get install -y jenkins
   SHELL
