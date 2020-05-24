@@ -1,0 +1,103 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+#MIT License
+#
+#Copyright (c) 2020 dfighter1985
+#
+#Permission is hereby granted, free of charge, to any person obtaining a copy
+#of this software and associated documentation files (the "Software"), to deal
+#in the Software without restriction, including without limitation the rights
+#to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+#copies of the Software, and to permit persons to whom the Software is
+#furnished to do so, subject to the following conditions:
+#
+#The above copyright notice and this permission notice shall be included in all
+#copies or substantial portions of the Software.
+#
+#THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+#IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+#FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+#AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+#LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+#OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+#SOFTWARE.
+
+Vagrant.configure("2") do |config|
+  config.vm.box = "ubuntu/xenial64"
+
+  # Don't check for Vagrant base box updates automatically
+  config.vm.box_check_update = false
+  config.vm.hostname = "dspace6";
+
+  # Forward ports
+  config.vm.network "forwarded_port", guest: 80, host: 80
+  config.vm.network "forwarded_port", guest: 443, host: 443
+  config.vm.network "forwarded_port", guest: 8080, host: 8080
+
+  config.vm.provider "virtualbox" do |vb|
+    vb.gui = true
+	vb.cpus = 2
+    vb.memory = "8192"
+  end
+  
+  # Provision the virtual machine with shell commands
+  config.vm.provision "shell", inline: <<-SHELL
+	 export DEBIAN_FRONTEND=noninteractive
+	 
+	 echo "127.0.1.2 dspace.local" >> /etc/hosts
+	 
+	 # Install dependencies
+	 apt-get update
+	 apt-get dist-upgrade -y
+	 apt-get install -y mc git default-jdk-headless tomcat7 maven ant postgresql-client postgresql nginx
+	 
+	 # Nginx SSL
+	 mkdir /etc/nginx/ssl
+	 openssl req -new -x509 -nodes -subj '/CN=dspace.local' -out /etc/nginx/ssl/dspace.local.crt -keyout /etc/nginx/ssl/dspace.local.key -days 3652
+	 echo "ssl_certificate /etc/nginx/ssl/dspace.local.crt;" > /etc/nginx/snippets/ssl.conf
+	 echo "ssl_certificate_key /etc/nginx/ssl/dspace.local.key;" >> /etc/nginx/snippets/ssl.conf
+	 
+	 # Nginx site config
+	 cp /vagrant/etc/nginx/sites-available/dspace /etc/nginx/sites-available/dspace
+	 ln -s /etc/nginx/sites-available/dspace /etc/nginx/sites-enabled/dspace
+	 rm /etc/nginx/sites-enabled/default
+	 service nginx restart
+	 
+	 # Create PostgreSQL database and user
+	 echo "CREATE ROLE dspace NOCREATEROLE NOSUPERUSER NOCREATEDB INHERIT LOGIN;" | sudo -u postgres psql
+	 echo "ALTER USER dspace WITH PASSWORD 'dspace';" | sudo -u postgres psql
+	 sudo -u postgres createdb --owner=dspace --encoding=UNICODE dspace
+	 echo "CREATE EXTENSION pgcrypto;" | sudo -u postgres psql dspace
+	 
+	 # Get source
+	 wget https://github.com/DSpace/DSpace/archive/dspace-6_x.zip --progress=dot -O /srv/dspace-6_x.zip
+	 cd /srv/ && unzip dspace-6_x.zip
+	 
+	 # Enable Mirage2 theme
+	 sed -i s#"Mirage theme, @mire contributed theme, default since DSpace 3.0"#"Mirage2 theme"#g /srv/DSpace-dspace-6_x/dspace/config/xmlui.xconf
+	 sed -i s#"Atmire Mirage Theme"#"Mirage2 Theme"#g /srv/DSpace-dspace-6_x/dspace/config/xmlui.xconf
+	 sed -i s#"Mirage/"#"Mirage2/"#g /srv/DSpace-dspace-6_x/dspace/config/xmlui.xconf
+	 
+	 # Copy config
+	 cp /vagrant/srv/dspace-src/dspace/config/local.cfg /srv/DSpace-dspace-6_x/dspace/config/local.cfg
+	 
+	 # Build source, must build as a non-root user
+	 chown -R vagrant:vagrant /srv/DSpace-dspace-6_x
+	 cd /srv/DSpace-dspace-6_x/ && HOME=/home/vagrant sudo -u vagrant mvn clean package -Dmirage2.on=true -B
+	 
+	 # Install binaries
+	 mkdir -p /srv/dspace
+	 cd /srv/DSpace-dspace-6_x/dspace/target/dspace-installer && ant fresh_install
+	 chown -R vagrant:vagrant /srv/DSpace-dspace-6_x
+	 chown -R tomcat7:tomcat7 /srv/dspace
+	 
+	 # Create administrator user
+	 sudo -u tomcat7 /srv/dspace/bin/dspace create-administrator -e admin@dspace.local -f admin -l admin -p admin -c enUS
+	 
+	 # Tomcat configuration
+	 cp /vagrant/etc/tomcat7/server.xml /etc/tomcat7/server.xml
+	 cp /vagrant/etc/default/tomcat7 /etc/default/tomcat7
+	 cp /vagrant/etc/tomcat7/Catalina/localhost/*.xml /etc/tomcat7/Catalina/localhost/
+	 service tomcat7 restart
+  SHELL
+end
