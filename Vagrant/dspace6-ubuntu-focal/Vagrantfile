@@ -1,0 +1,102 @@
+Vagrant.configure("2") do |config|
+  config.vm.box = "ubuntu/focal64"
+
+  config.vm.box_check_update = false
+  config.vm.network "forwarded_port", guest: 80, host: 80
+  config.vm.network "forwarded_port", guest: 443, host: 443
+
+  config.vm.provider "virtualbox" do |vb|
+    vb.gui = true
+	vb.cpus = 2
+    vb.memory = "8192"
+  end
+  
+  # Provision the virtual machine with shell commands
+  config.vm.provision "shell", inline: <<-SHELL
+	 export DEBIAN_FRONTEND=noninteractive
+	 
+	 # Install dependencies
+	 apt-get update
+	 apt-get dist-upgrade -y
+	 # JDK8 must be installed first, otherwise it will install JDK11 as the default
+	 apt-get install -y openjdk-8-jdk-headless
+	 apt-get install -y maven ant nginx
+	 apt-get install -y postgresql postgresql-client net-tools mc
+	 
+	 # Download and install Tomcat7
+	 wget https://downloads.apache.org/tomcat/tomcat-7/v7.0.106/bin/apache-tomcat-7.0.106.tar.gz -O /srv/tomcat7.tar.gz
+	 cd /srv/ && tar xvfz tomcat7.tar.gz
+	 rm /srv/tomcat7.tar.gz
+	 ln -s /srv/apache-tomcat-7.0.106 /srv/tomcat7	 
+	 adduser --system --no-create-home tomcat7
+	 addgroup tomcat7
+	 adduser tomcat7 tomcat7
+	 chown -R tomcat7:tomcat7 /srv/apache-tomcat-7.0.106
+	 
+	 # Nginx SSL
+	 mkdir /etc/nginx/ssl
+	 openssl req -new -x509 -nodes -subj '/CN=dspace.local' -out /etc/nginx/ssl/dspace.local.crt -keyout /etc/nginx/ssl/dspace.local.key -days 3652
+	 echo "ssl_certificate /etc/nginx/ssl/dspace.local.crt;" > /etc/nginx/snippets/ssl.conf
+	 echo "ssl_certificate_key /etc/nginx/ssl/dspace.local.key;" >> /etc/nginx/snippets/ssl.conf
+	 
+	 # Nginx site config
+	 cp -v /vagrant/etc/nginx/sites-available/dspace /etc/nginx/sites-available/dspace
+	 ln -s /etc/nginx/sites-available/dspace /etc/nginx/sites-enabled/dspace
+	 rm /etc/nginx/sites-enabled/default
+	 service nginx restart
+	 
+	 # Start PostgreSQL cluster
+	 pg_ctlcluster 12 main start
+	 
+	 # Create database and DSpace user
+	 echo "CREATE ROLE dspace NOCREATEROLE NOSUPERUSER NOCREATEDB INHERIT LOGIN;" | sudo -u postgres psql
+	 echo "ALTER USER dspace WITH PASSWORD 'dspace';" | sudo -u postgres psql
+	 sudo -u postgres createdb --owner=dspace --encoding=UNICODE dspace
+	 echo "CREATE EXTENSION pgcrypto;" | sudo -u postgres psql dspace
+	 
+	 # Download and extract DSpace6 source
+	 wget https://github.com/DSpace/DSpace/archive/dspace-6_x.zip --progress=dot -O /opt/dspace-6_x.zip
+	 cd /opt/ && unzip dspace-6_x.zip
+	 mv /opt/DSpace-dspace-6_x /opt/dspace6-src
+	 rm /opt/dspace-6_x.zip
+	 
+	 # Enable Mirage2 theme
+	 sed -i s#"Mirage theme, @mire contributed theme, default since DSpace 3.0"#"Mirage2 theme"#g /opt/dspace6-src/dspace/config/xmlui.xconf
+	 sed -i s#"Atmire Mirage Theme"#"Mirage2 Theme"#g /opt/dspace6-src/dspace/config/xmlui.xconf
+	 sed -i s#"Mirage/"#"Mirage2/"#g /opt/dspace6-src/dspace/config/xmlui.xconf
+	 
+	 # Copy config
+	 cp -v /vagrant/opt/dspace6-src/dspace/config/local.cfg /opt/dspace6-src/dspace/config/local.cfg
+	 
+	 # Tomcat configuration
+	 cp -v /vagrant/srv/tomcat7/conf/server.xml /srv/tomcat7/conf
+	 mkdir -p /srv/tomcat7/conf/Catalina/localhost
+	 cp -v /vagrant/srv/tomcat7/conf/Catalina/localhost/*.xml /srv/tomcat7/conf/Catalina/localhost/
+	 cp -v /vagrant/srv/tomcat7/bin/setenv.sh /srv/tomcat7/bin/setenv.sh
+	 chmod ug+x /srv/tomcat7/bin/setenv.sh
+	 chown tomcat7:tomcat7 /srv/tomcat7/bin/setenv.sh
+	 
+	 cp -v /vagrant/srv/dspace*.sh /srv/
+	 
+	 # Build DSpace.
+	 # From now on everything is commented out, because building sometimes fails (dependency download failure), and needs to be restarted
+	 #chown -R vagrant:vagrant /opt/dspace6-src
+	 #cd /opt/dspace6-src && HOME=/home/vagrant sudo -u vagrant mvn clean package -Dmirage2.on=true -B
+	 
+	 # Install DSpace binaries
+	 #mkdir -p /srv/dspace
+	 #cd /opt/dspace6-src/dspace/target/dspace-installer && ant fresh_install
+	 #chown -R vagrant:vagrant /opt/dspace6-src
+	 #chown -R tomcat7:tomcat7 /srv/dspace
+	 
+	 # Apply DSpace database schema updates
+	 #sudo -u tomcat7 /srv/dspace/bin/dspace database migrate
+	 
+	 # Create administrator user
+	 #sudo -u tomcat7 /srv/dspace/bin/dspace create-administrator -e admin@dspace.local -f admin -l admin -p admin -c enUS	 
+	 
+	 # Start with: sudo -u tomcat7 bash /srv/tomcat7/bin/startup.sh
+	 # Stop with:  sudo -u tomcat7 bash /srv/tomcat7/bin/shutdown.sh
+	 
+  SHELL
+end
