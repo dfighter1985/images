@@ -55,7 +55,7 @@ Vagrant.configure("2") do |config|
 	 echo "CREATE EXTENSION pgcrypto;" | sudo -u postgres psql dspace
 	 
 	 # Download and extract DSpace6 source
-	 wget https://github.com/DSpace/DSpace/archive/dspace-6_x.zip --progress=dot -O /opt/dspace-6_x.zip
+	 wget https://github.com/dfighter1985/DSpace/archive/dspace-6_x.zip --progress=dot -O /opt/dspace-6_x.zip
 	 cd /opt/ && unzip dspace-6_x.zip
 	 mv /opt/DSpace-dspace-6_x /opt/dspace6-src
 	 rm /opt/dspace-6_x.zip
